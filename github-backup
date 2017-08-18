@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+#  github_backup.py
+#
+#  Copyright 2017 Spencer McIntyre <zeroSteiner@gmail.com>
+#
+#  Redistribution and use in source and binary forms, with or without
+#  modification, are permitted provided that the following conditions are
+#  met:
+#
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#  * Redistributions in binary form must reproduce the above
+#    copyright notice, this list of conditions and the following disclaimer
+#    in the documentation and/or other materials provided with the
+#    distribution.
+#  * Neither the name of the  nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+#  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+#  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+#  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+#  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+#  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+#  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+#  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+#  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+import argparse
+import fnmatch
+import getpass
+import os
+import shutil
+import sys
+
+import git
+import github
+import yaml
+
+__version__ = '1.0'
+
+def _get_github(arguments, config):
+	if arguments.auth_token:
+		gh = github.Github(arguments.auth_token)
+	elif arguments.auth_user:
+		password = getpass.getpass("{0}@github.com: ".format(arguments.auth_user))
+		gh = github.Github(arguments.auth_user, password)
+	else:
+		gh = github.Github(config['token'])
+	return gh
+
+def _backup_repo(repo_url, destination):
+	repo = None
+	if os.path.isdir(destination):
+		repo = git.Repo(destination)
+		for remote in repo.remotes:
+			remote.fetch()
+	else:
+		try:
+			repo = git.Repo.clone_from(repo_url, destination)
+		except git.exc.GitCommandError:
+			if os.path.isdir(destination):
+				shutil.rmtree(destination)
+	return repo
+
+def backup_repo(repo, destination):
+	destination = os.path.join(destination, *repo.full_name.split('/'))
+	_backup_repo(repo.ssh_url, destination)
+
+def backup_wiki(repo, destination):
+	destination = os.path.join(destination, *repo.full_name.split('/')) + '.wiki'
+	_backup_repo(repo.ssh_url[:-4] + '.wiki.git', destination)
+
+def repo_matches_rules(rules, repo_slug, default=True):
+	for rule in rules:
+		result = True
+		if rule.startswith('!'):
+			result = False
+			rule = rule[1:]
+		if fnmatch.fnmatch(repo_slug, rule):
+			return result
+	return default
+
+def main():
+	parser = argparse.ArgumentParser(description='GitHub Backup', conflict_handler='resolve')
+	parser.add_argument('-v', '--version', action='version', version='%(prog)s Version: ' + __version__)
+	auth_type_parser_group = parser.add_mutually_exclusive_group()
+	auth_type_parser_group.add_argument('--auth-token', dest='auth_token', help='authenticate to github with a token')
+	auth_type_parser_group.add_argument('--auth-user', dest='auth_user', help='authenticate to github with credentials')
+	parser.add_argument('--dry-run', action='store_true', default=False, help='do not backup any repositories')
+	parser.add_argument('config', type=argparse.FileType('r'), help='the configuration file')
+	arguments = parser.parse_args()
+
+	config = yaml.load(arguments.config)
+	gh = _get_github(arguments, config)
+	user = gh.get_user()
+	repos = []
+	for repo in user.get_repos():
+		if not repo_matches_rules(config['rules'], repo.full_name):
+			continue
+		repos.append(repo)
+	print("rules matched {0:,} repositories".format(len(repos)))
+
+	destination = config['destination']
+	if not os.path.isdir(destination):
+		os.makedirs(destination)
+	width = len(str(len(repos)))
+	for idx, repo in enumerate(repos, 1):
+		print("[{0: >{width}}/{1: >{width}}] processing: {2}".format(idx, len(repos), repo.full_name, width=width))
+		if arguments.dry_run:
+			continue
+		backup_repo(repo, destination)
+		if 'wikis' in config['include'] and repo.has_wiki:
+			backup_wiki(repo, destination)
+	return 0
+
+if __name__ == '__main__':
+	sys.exit(main())
