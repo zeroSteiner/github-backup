@@ -1,0 +1,15 @@
+# the path of the base directory to backup data into
+destination: github.com
+
+# currently, only 'wikis' are supported for this directive
+include:
+  - wikis
+
+# rules are simple glob patterns, ones that start with a ! are used for
+# excluding repositories
+rules:
+  - "*"
+  - "!*"
+
+# a personal api token, see: https://github.com/blog/1509-personal-api-tokens
+token: GITHUB_TOKEN
