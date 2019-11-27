@@ -97,7 +97,7 @@ def main():
 	parser.add_argument('config', type=argparse.FileType('r'), help='the configuration file')
 	arguments = parser.parse_args()
 
-	config = yaml.load(arguments.config)
+	config = yaml.safe_load(arguments.config)
 	gh = _get_github(arguments, config)
 	user = gh.get_user()
 	repos = []
